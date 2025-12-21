@@ -69,7 +69,12 @@ The importer uses the "NCNI-5" hack to filter Home Depot categories for clearanc
 5. Set the main file path: `app.py`
 6. Click "Deploy"
 
-**Note**: Playwright requires browser binaries. If deployment fails, you may need to use a custom Docker image or alternative scraping method.
+**Note**: The app automatically installs Playwright browser binaries on first launch. This may take 1-2 minutes during the initial deployment. The app will show a message when installation is in progress.
+
+**Important**: If you encounter issues with Playwright on Streamlit Cloud:
+- The first deployment may take longer due to browser installation
+- If installation fails, try redeploying the app
+- Make sure your repository is public (required for Streamlit Community Cloud)
 
 ## Project Structure
 
