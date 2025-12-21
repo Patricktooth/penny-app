@@ -71,10 +71,13 @@ The importer uses the "NCNI-5" hack to filter Home Depot categories for clearanc
 
 **Note**: The app automatically installs Playwright browser binaries on first launch. This may take 1-2 minutes during the initial deployment. The app will show a message when installation is in progress.
 
+**System Dependencies**: The `packages.txt` file includes all required system libraries for Playwright Chromium (libnspr4, libnss3, etc.). Streamlit Cloud will automatically install these during deployment.
+
 **Important**: If you encounter issues with Playwright on Streamlit Cloud:
-- The first deployment may take longer due to browser installation
+- The first deployment may take longer due to browser and system dependency installation
 - If installation fails, try redeploying the app
 - Make sure your repository is public (required for Streamlit Community Cloud)
+- Ensure `packages.txt` is present in your repository root
 
 ## Project Structure
 
@@ -85,6 +88,7 @@ penny-app/
 ├── importer.py         # Clearance item importer (NCNI-5 hack)
 ├── setup.sh            # Setup script for local development
 ├── requirements.txt    # Python dependencies
+├── packages.txt        # System dependencies for Playwright (Streamlit Cloud)
 ├── tracked_skus.csv    # Tracked SKUs (user-specific, not in repo)
 └── price_history.csv   # Price history (user-specific, not in repo)
 ```
