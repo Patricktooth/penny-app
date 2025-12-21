@@ -33,10 +33,19 @@ class ClearanceImporter:
         if self.browser is None or self.playwright is None:
             if self.playwright is None:
                 self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-blink-features=AutomationControlled']
-            )
+            try:
+                self.browser = await self.playwright.chromium.launch(
+                    headless=True,
+                    args=['--no-sandbox', '--disable-blink-features=AutomationControlled']
+                )
+            except Exception as e:
+                error_msg = str(e)
+                if "Executable doesn't exist" in error_msg or "playwright install" in error_msg.lower():
+                    raise Exception(
+                        "Playwright browsers are not installed. "
+                        "Please wait for the automatic installation to complete, or refresh the page."
+                    ) from e
+                raise
             self.context = await self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'

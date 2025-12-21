@@ -12,6 +12,8 @@ from typing import Dict, Any, Optional
 import asyncio
 import time
 import os
+import subprocess
+import sys
 
 
 def calculate_penny_drop_probability(price: float) -> Dict[str, Any]:
@@ -209,6 +211,71 @@ def load_price_history() -> pd.DataFrame:
         return pd.DataFrame(columns=['sku', 'price', 'timestamp'])
 
 
+def ensure_playwright_browsers():
+    """
+    Ensure Playwright browsers are installed.
+    This is needed for Streamlit Cloud deployment where browsers aren't pre-installed.
+    Runs silently in the background and only shows messages if installation is needed.
+    """
+    # Check if this has already been checked/installed in this session
+    if 'playwright_checked' in st.session_state:
+        return
+    
+    try:
+        # Try to import and check if browsers are available
+        from playwright.sync_api import sync_playwright
+        playwright = sync_playwright().start()
+        
+        # Try to launch chromium to see if it's installed
+        try:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+            playwright.stop()
+            st.session_state.playwright_checked = True
+            st.session_state.playwright_installed = True
+            return
+        except Exception:
+            # Browser not installed, need to install it
+            playwright.stop()
+            raise Exception("Browser not installed")
+            
+    except Exception:
+        # Mark as checked to avoid multiple attempts
+        st.session_state.playwright_checked = True
+        
+        # Install Playwright browsers
+        try:
+            # Use a container to show the spinner only when needed
+            install_container = st.empty()
+            with install_container.container():
+                st.info("🌐 Installing Playwright browsers (first time setup - this may take 1-2 minutes)...")
+            
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            install_container.empty()
+            
+            if result.returncode == 0:
+                st.success("✅ Playwright browsers installed successfully! The app is ready to use.")
+                st.session_state.playwright_installed = True
+                # Rerun to clear the message after a moment
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error(f"❌ Playwright installation failed: {result.stderr}")
+                st.session_state.playwright_installed = False
+        except subprocess.TimeoutExpired:
+            st.error("❌ Playwright browser installation timed out. Please refresh the page and try again.")
+            st.session_state.playwright_installed = False
+        except Exception as e:
+            st.error(f"❌ Error installing Playwright browsers: {str(e)}")
+            st.session_state.playwright_installed = False
+
+
 # Page configuration
 st.set_page_config(
     page_title="Home Depot Penny Drop Predictor",
@@ -216,6 +283,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Ensure Playwright browsers are installed (only runs once per session)
+ensure_playwright_browsers()
 
 # Title and description
 st.title("🏠 Home Depot Price Tracker")
