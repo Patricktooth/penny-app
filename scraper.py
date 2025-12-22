@@ -42,8 +42,17 @@ class HomeDepotScraper:
                 raise
             self.context = await self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                ignore_https_errors=True
             )
+            
+            # Suppress console warnings from the website (not our code)
+            async def handle_console(msg):
+                # Only log actual errors, ignore warnings
+                if msg.type == 'error':
+                    print(f"Browser console error: {msg.text}")
+            
+            self.page.on('console', handle_console)
             # Apply stealth mode using the new Stealth class API on context
             # This ensures all pages created within this context inherit stealth techniques
             stealth = Stealth()
@@ -210,9 +219,9 @@ class HomeDepotScraper:
         
         return None
     
-    def get_price_by_sku(self, sku: str) -> Optional[Dict[str, Any]]:
+    async def _get_price_by_sku_async(self, sku: str) -> Optional[Dict[str, Any]]:
         """
-        Get product price by SKU using Playwright.
+        Async wrapper that handles both fetching and cleanup in the same event loop.
         
         Args:
             sku: Product SKU number
@@ -222,19 +231,29 @@ class HomeDepotScraper:
         """
         product_url = f"https://www.homedepot.com/p/{sku}"
         
-        # Run async method in sync context
         try:
-            result = asyncio.run(self._fetch_from_product_page_async(product_url, sku))
+            result = await self._fetch_from_product_page_async(product_url, sku)
             return result
         except Exception as e:
             print(f"❌ Error: {e}")
             return None
         finally:
-            # Cleanup browser
-            try:
-                asyncio.run(self._close_browser())
-            except Exception:
-                pass
+            # Cleanup browser in the same event loop
+            await self._close_browser()
+    
+    def get_price_by_sku(self, sku: str) -> Optional[Dict[str, Any]]:
+        """
+        Get product price by SKU using Playwright.
+        Uses a single event loop for both fetching and cleanup.
+        
+        Args:
+            sku: Product SKU number
+            
+        Returns:
+            Dictionary with price and product info, or None if failed
+        """
+        # Use a single asyncio.run() call that handles both fetch and cleanup
+        return asyncio.run(self._get_price_by_sku_async(sku))
     
     def get_price(self, sku: str) -> Optional[float]:
         """
@@ -264,9 +283,9 @@ def get_product_price(sku: str) -> Optional[float]:
     return scraper.get_price(sku)
 
 
-def bulk_update(csv_path: str = "tracked_skus.csv", price_history_path: str = "price_history.csv") -> Dict[str, Any]:
+async def _bulk_update_async(csv_path: str = "tracked_skus.csv", price_history_path: str = "price_history.csv") -> Dict[str, Any]:
     """
-    Bulk update prices for all SKUs in the tracked_skus.csv file.
+    Async bulk update that processes all SKUs in a single event loop.
     
     Args:
         csv_path: Path to the tracked SKUs CSV file
@@ -287,7 +306,7 @@ def bulk_update(csv_path: str = "tracked_skus.csv", price_history_path: str = "p
                 'failed': 0
             }
         
-        # Initialize scraper (reuse for efficiency)
+        # Initialize scraper (reuse for efficiency - but each SKU will still create/close browser)
         scraper = HomeDepotScraper()
         
         updated_count = 0
@@ -300,15 +319,15 @@ def bulk_update(csv_path: str = "tracked_skus.csv", price_history_path: str = "p
         except FileNotFoundError:
             history_df = pd.DataFrame(columns=['sku', 'price', 'timestamp'])
         
-        # Update each SKU
+        # Update each SKU using async method directly (avoids multiple event loops)
         for idx, row in df.iterrows():
             sku = str(row['sku']).strip()
             if not sku or sku == 'nan':
                 continue
             
             try:
-                # Fetch price
-                result = scraper.get_price_by_sku(sku)
+                # Fetch price using async method directly
+                result = await scraper._get_price_by_sku_async(sku)
                 
                 if result and result.get('price'):
                     price = result['price']
@@ -363,6 +382,22 @@ def bulk_update(csv_path: str = "tracked_skus.csv", price_history_path: str = "p
             'updated': 0,
             'failed': 0
         }
+
+
+def bulk_update(csv_path: str = "tracked_skus.csv", price_history_path: str = "price_history.csv") -> Dict[str, Any]:
+    """
+    Bulk update prices for all SKUs in the tracked_skus.csv file.
+    Uses a single event loop for all operations to avoid resource leaks.
+    
+    Args:
+        csv_path: Path to the tracked SKUs CSV file
+        price_history_path: Path to the price history CSV file
+        
+    Returns:
+        Dictionary with update statistics
+    """
+    # Use a single asyncio.run() call for all SKUs
+    return asyncio.run(_bulk_update_async(csv_path, price_history_path))
 
 
 if __name__ == "__main__":

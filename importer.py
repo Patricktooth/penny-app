@@ -48,12 +48,21 @@ class ClearanceImporter:
                 raise
             self.context = await self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                ignore_https_errors=True
             )
             # Apply stealth mode
             stealth = Stealth()
             await stealth.apply_stealth_async(self.context)
             self.page = await self.context.new_page()
+            
+            # Suppress console warnings from the website (not our code)
+            async def handle_console(msg):
+                # Only log actual errors, ignore warnings
+                if msg.type == 'error':
+                    print(f"Browser console error: {msg.text}")
+            
+            self.page.on('console', handle_console)
             
             # Set store cookie
             await self.context.add_cookies([{
