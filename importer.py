@@ -114,79 +114,174 @@ class ClearanceImporter:
             # Navigate to clearance URL
             await self.page.goto(clearance_url, wait_until='networkidle', timeout=30000)
             
-            # Wait a bit for page to fully load
+            # Wait for page to fully load - try waiting for product containers
+            try:
+                # Wait for product grid or product tiles to appear
+                await self.page.wait_for_selector(
+                    'a[href*="/p/"], [data-testid*="product"], [class*="product"]',
+                    timeout=10000,
+                    state='attached'
+                )
+            except Exception:
+                # If specific selector doesn't appear, just wait a bit
+                pass
+            
+            # Scroll down to load lazy-loaded products
+            await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
             await self.page.wait_for_timeout(2000)
             
+            # Scroll back up
+            await self.page.evaluate('window.scrollTo(0, 0)')
+            await self.page.wait_for_timeout(1000)
+            
             skus = []
+            seen_skus = set()  # Track SKUs we've already found
             
-            # Strategy 1: Look for product headers with data-testid
-            product_elements = await self.page.query_selector_all('[data-testid="product-header"]')
+            # Strategy 1: Look for product links with /p/ pattern (most reliable)
+            print(f"   Searching for product links...")
+            product_links = await self.page.query_selector_all('a[href*="/p/"]')
+            print(f"   Found {len(product_links)} product links")
             
-            for element in product_elements[:max_items]:
+            for link in product_links:
+                if len(skus) >= max_items:
+                    break
                 try:
-                    # Try to get SKU from data-productid or similar attributes
-                    product_id = await element.get_attribute('data-productid')
-                    if not product_id:
-                        # Try other common attributes
-                        product_id = await element.get_attribute('data-sku')
-                    if not product_id:
-                        # Try getting from link href
-                        link = await element.query_selector('a')
-                        if link:
-                            href = await link.get_attribute('href')
-                            if href and '/p/' in href:
-                                # Extract SKU from URL like /p/SKU/...
-                                parts = href.split('/p/')
-                                if len(parts) > 1:
-                                    product_id = parts[1].split('/')[0].split('?')[0]
-                    
-                    if product_id:
-                        # Try to get product name
-                        name = ""
-                        try:
-                            name_elem = await element.query_selector('[data-testid="product-title"], .product-title, h2, h3')
-                            if name_elem:
-                                name = await name_elem.inner_text()
-                                name = name.strip()
-                        except Exception:
-                            pass
-                        
-                        skus.append({
-                            'sku': product_id,
-                            'name': name or f"Product {product_id}",
-                            'store_id': self.store_id
-                        })
+                    href = await link.get_attribute('href')
+                    if href and '/p/' in href:
+                        # Handle both relative and absolute URLs
+                        if href.startswith('/'):
+                            href = f"https://www.homedepot.com{href}"
+                        elif not href.startswith('http'):
+                            continue
+                            
+                        # Extract SKU from URL like /p/SKU/... or /p/SKU
+                        parts = href.split('/p/')
+                        if len(parts) > 1:
+                            sku = parts[1].split('/')[0].split('?')[0].strip()
+                            
+                            # Validate SKU (should be alphanumeric, typically 6-10 chars)
+                            if sku and len(sku) >= 4 and sku not in seen_skus:
+                                seen_skus.add(sku)
+                                
+                                # Try to get product name
+                                name = ""
+                                try:
+                                    # Try to get name from link text or nearby elements
+                                    name = await link.inner_text()
+                                    if not name or len(name.strip()) < 3:
+                                        # Try parent container
+                                        parent = await link.evaluate_handle('el => el.closest("[data-testid*=\"product\"], .product, [class*=\"Product\"]")')
+                                        if parent:
+                                            name_elem = await parent.query_selector('h2, h3, [data-testid="product-title"], .product-title')
+                                            if name_elem:
+                                                name = await name_elem.inner_text()
+                                except Exception:
+                                    pass
+                                
+                                skus.append({
+                                    'sku': sku,
+                                    'name': name.strip() if name and name.strip() else f"Product {sku}",
+                                    'store_id': self.store_id
+                                })
+                                print(f"   Found SKU: {sku}")
                 except Exception as e:
-                    print(f"⚠️  Error extracting product info: {e}")
                     continue
             
-            # Strategy 2: If we didn't find enough, try looking for product links directly
+            # Strategy 2: Look for product tiles/containers with data attributes
             if len(skus) < max_items:
-                product_links = await self.page.query_selector_all('a[href*="/p/"]')
-                for link in product_links:
+                print(f"   Searching for product containers...")
+                product_containers = await self.page.query_selector_all(
+                    '[data-testid*="product"], [data-automation-id*="product"], [class*="product-tile"], [class*="ProductTile"]'
+                )
+                print(f"   Found {len(product_containers)} product containers")
+                
+                for container in product_containers:
                     if len(skus) >= max_items:
                         break
                     try:
-                        href = await link.get_attribute('href')
-                        if href and '/p/' in href:
-                            parts = href.split('/p/')
-                            if len(parts) > 1:
-                                sku = parts[1].split('/')[0].split('?')[0]
-                                # Check if we already have this SKU
-                                if not any(s['sku'] == sku for s in skus):
-                                    name = await link.inner_text()
-                                    skus.append({
-                                        'sku': sku,
-                                        'name': name.strip() if name else f"Product {sku}",
-                                        'store_id': self.store_id
-                                    })
+                        # Try to find link within container
+                        link = await container.query_selector('a[href*="/p/"]')
+                        if link:
+                            href = await link.get_attribute('href')
+                            if href and '/p/' in href:
+                                if href.startswith('/'):
+                                    href = f"https://www.homedepot.com{href}"
+                                elif not href.startswith('http'):
+                                    continue
+                                    
+                                parts = href.split('/p/')
+                                if len(parts) > 1:
+                                    sku = parts[1].split('/')[0].split('?')[0].strip()
+                                    
+                                    if sku and len(sku) >= 4 and sku not in seen_skus:
+                                        seen_skus.add(sku)
+                                        
+                                        # Get product name
+                                        name = ""
+                                        try:
+                                            name_elem = await container.query_selector('h2, h3, [data-testid*="title"], [data-automation-id*="title"]')
+                                            if name_elem:
+                                                name = await name_elem.inner_text()
+                                        except Exception:
+                                            pass
+                                        
+                                        skus.append({
+                                            'sku': sku,
+                                            'name': name.strip() if name and name.strip() else f"Product {sku}",
+                                            'store_id': self.store_id
+                                        })
+                                        print(f"   Found SKU from container: {sku}")
                     except Exception:
                         continue
+            
+            # Strategy 3: Look for any elements with product IDs in data attributes
+            if len(skus) < max_items:
+                print(f"   Searching for product IDs in data attributes...")
+                elements_with_ids = await self.page.query_selector_all(
+                    '[data-productid], [data-sku], [data-item-id]'
+                )
+                print(f"   Found {len(elements_with_ids)} elements with product IDs")
+                
+                for element in elements_with_ids:
+                    if len(skus) >= max_items:
+                        break
+                    try:
+                        product_id = await element.get_attribute('data-productid')
+                        if not product_id:
+                            product_id = await element.get_attribute('data-sku')
+                        if not product_id:
+                            product_id = await element.get_attribute('data-item-id')
+                        
+                        if product_id and product_id not in seen_skus:
+                            seen_skus.add(product_id)
+                            
+                            # Try to get name
+                            name = ""
+                            try:
+                                name_elem = await element.query_selector('h2, h3, [data-testid*="title"]')
+                                if name_elem:
+                                    name = await name_elem.inner_text()
+                            except Exception:
+                                pass
+                            
+                            skus.append({
+                                'sku': product_id,
+                                'name': name.strip() if name and name.strip() else f"Product {product_id}",
+                                'store_id': self.store_id
+                            })
+                            print(f"   Found SKU from attribute: {product_id}")
+                    except Exception:
+                        continue
+            
+            print(f"   Total SKUs extracted: {len(skus)}")
             
             return skus[:max_items]
             
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
             print(f"❌ Error fetching clearance SKUs from {category_url}: {e}")
+            print(f"   Details: {error_details}")
             return []
     
     async def import_from_categories(self, categories: List[Dict[str, str]], max_per_category: int = 15) -> List[Dict[str, Any]]:
@@ -323,6 +418,17 @@ def find_clearance_items(store_id: str = "0121", max_per_category: int = 15) -> 
         # Import SKUs from all categories
         skus = asyncio.run(importer.import_from_categories(categories, max_per_category))
         
+        # Debug: Print what we found
+        print(f"🔍 Import completed. Found {len(skus)} total SKUs")
+        if skus:
+            print(f"   Sample SKUs: {[s.get('sku', 'N/A') for s in skus[:5]]}")
+        else:
+            print("   ⚠️  No SKUs found. This could mean:")
+            print("      - The NCNI-5 parameter isn't working")
+            print("      - Home Depot's page structure has changed")
+            print("      - No clearance items in these categories")
+            print("      - The page didn't load properly")
+        
         # Save to CSV
         result = importer.save_to_csv(skus)
         
@@ -336,6 +442,10 @@ def find_clearance_items(store_id: str = "0121", max_per_category: int = 15) -> 
             'new_sku_list': result.get('skus', [])
         }
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Error during import: {e}")
+        print(f"   Details: {error_details}")
         return {
             'success': False,
             'message': f'Error during import: {str(e)}',
