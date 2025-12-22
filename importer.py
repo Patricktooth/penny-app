@@ -58,11 +58,32 @@ class ClearanceImporter:
             
             # Suppress console warnings from the website (not our code)
             async def handle_console(msg):
-                # Only log actual errors, ignore warnings
-                if msg.type == 'error':
+                # Filter out common website warnings that don't affect our scraping
+                text = msg.text.lower()
+                ignored_patterns = [
+                    'content security policy',
+                    'csp',
+                    'eval',
+                    'autocomplete',
+                    'unrecognized feature',
+                    'iframe',
+                    'sandbox'
+                ]
+                
+                # Only log actual errors, ignore warnings and CSP messages
+                if msg.type == 'error' and not any(pattern in text for pattern in ignored_patterns):
                     print(f"Browser console error: {msg.text}")
             
             self.page.on('console', handle_console)
+            
+            # Suppress page errors (like CSP violations)
+            async def handle_page_error(error):
+                # Filter out CSP and other website-side errors
+                error_text = str(error).lower()
+                if 'content security policy' not in error_text and 'csp' not in error_text:
+                    print(f"Page error: {error}")
+            
+            self.page.on('pageerror', handle_page_error)
             
             # Set store cookie
             await self.context.add_cookies([{
